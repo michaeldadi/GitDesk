@@ -1,0 +1,40 @@
+name: Swift CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: swift-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.2.app/Contents/Developer
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Run tests
+        run: swift test
+      - name: Build local app bundle
+        run: bash Scripts/build-app.sh
+      - name: Verify app bundle
+        run: |
+          test -x dist/GitDesk.app/Contents/MacOS/GitDeskApp
+          test -x dist/GitDesk.app/Contents/MacOS/gitdesk
+          plutil -lint dist/GitDesk.app/Contents/Info.plist
+          codesign --verify --deep --strict --verbose=2 dist/GitDesk.app

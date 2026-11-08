@@ -4,3 +4,13 @@ DerivedData/
 dist/
 *.xcuserstate
 .DS_Store
+.env
+.env.*
+!.env.example
+*.p12
+*.p8
+*.pem
+*.key
+*.mobileprovision
+*.log
+xcuserdata/
