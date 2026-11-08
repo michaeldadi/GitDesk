@@ -13,10 +13,11 @@ The [implementation plan](Docs/implementation-plan.md) and [Tower 18 parity matr
 - File staging, unstaging, commits, local branches, fetch, fast-forward pull, push, and stashes
 - Paged commit history and commit details
 - Local branch-parent and stacked metadata, visible in Branches Review and editable from its context menu or the CLI
+- Reversible branch archiving with merged/stale candidate preview, bulk selection, pinned/skip protections, and opt-in automatic checks once per UTC day while viewing branches
 - Worktree listing and creation from the current commit
 - A command-line companion for common local operations and opening a repository in the app
 
-GitDesk currently uses the system Git executable. It does not yet bundle Git or Git LFS. Hosting account connections, pull-request management, fine-grained staging, conflict tools, and release packaging are planned but not implemented.
+GitDesk currently uses the system Git executable. It does not yet bundle Git or Git LFS. Hosting account connections, pull-request management, individual-line staging, conflict tools, and release packaging are planned but not implemented.
 
 ## Build
 
@@ -42,7 +43,7 @@ gitdesk --repo /path/to/repository branch parent agent/review --set main
 gitdesk --repo /path/to/repository branch stacked agent/review --set
 ```
 
-Branch relationships are stored only in that repository's Git configuration under GitDesk-specific keys. They are metadata for the current prototype; automatic restacking is not implemented.
+Branch relationships and archive state are stored only in that repository's Git configuration under GitDesk-specific keys. Archive actions keep the branch refs and commits. Automatic archiving uses the comparison base selected when it is enabled and runs when the Branches view loads; it is not a background service. Automatic restacking is not implemented.
 
 The `open` command uses the app's `gitdesk:` URL handler. Launch the app once to register it with macOS.
 

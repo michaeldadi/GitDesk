@@ -36,6 +36,8 @@ final class WorkspaceModel: ObservableObject {
     @Published var tags: [String] = []
     @Published var remotes: [String] = []
     @Published var branchReview: [GitBranchReview] = []
+    @Published var archiveCandidates: [GitBranchArchiveCandidate] = []
+    @Published var archiveSettings = GitBranchArchiveSettings()
     @Published var branchReviewBase: String?
     @Published var selectedReviewBranch: String?
     @Published var selectedFile: String?
@@ -169,8 +171,15 @@ final class WorkspaceModel: ObservableObject {
                     ? try await repository.history(limit: 100) : []
                 let base = branchReviewBase.flatMap { nextBranches.contains($0) ? $0 : nil }
                     ?? (nextBranches.contains("main") ? "main" : nextBranches.first)
+                let nextSettings = section == .branches
+                    ? try await repository.branchArchiveSettings() : GitBranchArchiveSettings()
+                if section == .branches, nextSettings.automaticallyArchive {
+                    _ = try await repository.runAutomaticBranchArchive()
+                }
                 let nextReview = section == .branches && base != nil
                     ? try await repository.branchReview(base: base!) : []
+                let nextCandidates = section == .branches && base != nil
+                    ? try await repository.archiveCandidates(base: base!) : []
                 let nextTags = section == .branches ? try await repository.tags() : []
                 let nextRemotes = section == .branches ? try await repository.remotes() : []
                 let nextStashes = section == .stashes
@@ -187,6 +196,8 @@ final class WorkspaceModel: ObservableObject {
                 if section == .branches {
                     branchReviewBase = base
                     branchReview = nextReview
+                    archiveCandidates = nextCandidates
+                    archiveSettings = nextSettings
                     tags = nextTags
                     remotes = nextRemotes
                 }
@@ -243,6 +254,9 @@ final class WorkspaceModel: ObservableObject {
                     Upstream: \(branch.upstream ?? "None")
                     Parent: \(relationship.parent ?? "None")
                     Stacked: \(relationship.isStacked ? "Yes" : "No")
+                    Archived: \(branch.isArchived ? "Yes" : "No")
+                    Pinned: \(branch.isPinned ? "Yes" : "No")
+                    Skip auto-archiving: \(branch.skipsAutoArchive ? "Yes" : "No")
                     Worktree: \(branch.worktreePath ?? "None")
                     """
             } catch {
@@ -374,6 +388,26 @@ final class WorkspaceModel: ObservableObject {
     }
     func setBranchStacked(_ stacked: Bool, for branch: String) {
         execute { try await $0.setBranchStacked(stacked, for: branch) }
+    }
+    func setBranchArchived(_ archived: Bool, for branch: String) {
+        execute { try await $0.setBranchArchived(archived, for: branch) }
+    }
+    func setBranchPinned(_ pinned: Bool, for branch: String) {
+        execute { try await $0.setBranchPinned(pinned, for: branch) }
+    }
+    func setBranchSkipAutoArchive(_ skip: Bool, for branch: String) {
+        execute { try await $0.setBranchSkipAutoArchive(skip, for: branch) }
+    }
+    func archiveSelectedBranches(_ names: [String]) {
+        guard let base = branchReviewBase else { return }
+        execute { try await $0.archiveBranches(names, base: base) }
+    }
+    func setAutomaticBranchArchive(_ enabled: Bool) {
+        let base = branchReviewBase
+        execute { try await $0.setAutomaticBranchArchive(enabled, base: base) }
+    }
+    func setStaleBranchInterval(months: Int) {
+        execute { try await $0.setStaleBranchInterval(months: months) }
     }
     func createTag(_ name: String) { execute { try await $0.createTag(name) } }
     func deleteTag(_ name: String) { execute { try await $0.deleteTag(name) } }

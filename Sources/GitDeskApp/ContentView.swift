@@ -18,6 +18,8 @@ struct ContentView: View {
     @State private var showingCloneDialog = false
     @State private var showingTagDialog = false
     @State private var showingRemoteDialog = false
+    @State private var showingArchiveDialog = false
+    @State private var archiveSelection: Set<String> = []
     @State private var tagToDelete: String?
     @State private var remoteToRemove: String?
     @State private var referenceTab: ReferenceTab = .branches
@@ -542,9 +544,35 @@ struct ContentView: View {
                     .frame(maxWidth: 190)
                 }
                 Spacer()
-                Text("\(model.branchReview.count) branches")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                Button("Archive \(model.archiveCandidates.count) Eligible…") {
+                    archiveSelection.removeAll()
+                    showingArchiveDialog = true
+                }
+                .buttonStyle(.plain)
+                .font(.caption.weight(.medium))
+                .disabled(model.archiveCandidates.isEmpty || model.isBusy)
+                Menu {
+                    Toggle("Archive eligible branches automatically", isOn: Binding(
+                        get: { model.archiveSettings.automaticallyArchive },
+                        set: { model.setAutomaticBranchArchive($0) }
+                    ))
+                    if model.archiveSettings.automaticallyArchive,
+                       let base = model.archiveSettings.automaticArchiveBase {
+                        Text("Auto archive base: \(base)")
+                    }
+                    Menu("Stale after") {
+                        ForEach([1, 2, 3, 4, 6, 9, 12, 18, 24], id: \.self) { months in
+                            Button("\(months) \(months == 1 ? "Month" : "Months")\(model.archiveSettings.staleAfterMonths == months ? " ✓" : "")") {
+                                model.setStaleBranchInterval(months: months)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "gearshape")
+                        .accessibilityLabel("Branch archive settings")
+                }
+                .menuStyle(.borderlessButton)
+                .frame(width: 24)
             }
             .padding(.horizontal, 18)
             .padding(.vertical, 8)
@@ -552,54 +580,15 @@ struct ContentView: View {
                 ContentUnavailableView("No branches", systemImage: "arrow.triangle.branch")
             } else {
                 List(selection: $model.selectedReviewBranch) {
-                    ForEach(model.branchReview) { branch in
-                        HStack(alignment: .top, spacing: 10) {
-                            Image(systemName: branch.isMergedIntoBase
-                                ? "checkmark.circle.fill" : "circle.dotted")
-                                .foregroundStyle(branch.isMergedIntoBase ? .green : .orange)
-                                .frame(width: 18)
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack {
-                                    Text(branch.name).font(.system(size: 13, weight: .medium))
-                                    if branch.worktreePath != nil {
-                                        Image(systemName: "folder.badge.gearshape")
-                                            .accessibilityLabel("Checked out in a worktree")
-                                    }
-                                }
-                                Text(branch.subject)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            if let date = branch.lastCommit {
-                                Text(date, style: .relative)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
+                    Section("Branches") {
+                        ForEach(model.branchReview.filter { !$0.isArchived }) { branch in
+                            branchReviewRow(branch)
                         }
-                        .padding(.vertical, 5)
-                        .tag(branch.name)
-                        .contextMenu {
-                            Menu("Parent Branch") {
-                                ForEach(model.branches.filter { $0 != branch.name }, id: \.self) { parent in
-                                    Button(parent) { model.setBranchParent(parent, for: branch.name) }
-                                }
-                                Divider()
-                                Button("Clear Parent") {
-                                    model.setBranchParent(nil, for: branch.name)
-                                }
-                            }
-                            Button("Mark as Stacked") {
-                                model.setBranchStacked(true, for: branch.name)
-                            }
-                            Button("Unstack Branch") {
-                                model.setBranchStacked(false, for: branch.name)
-                            }
-                            if let path = branch.worktreePath {
-                                Button("Open Worktree") {
-                                    model.addRepository(URL(fileURLWithPath: path, isDirectory: true))
-                                }
+                    }
+                    if model.branchReview.contains(where: \.isArchived) {
+                        Section("Archived Branches") {
+                            ForEach(model.branchReview.filter(\.isArchived)) { branch in
+                                branchReviewRow(branch)
                             }
                         }
                     }
@@ -610,6 +599,118 @@ struct ContentView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingArchiveDialog) {
+            archiveBranchesSheet
+        }
+    }
+
+    private func branchReviewRow(_ branch: GitBranchReview) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: branch.isArchived ? "archivebox" :
+                    (branch.isMergedIntoBase ? "checkmark.circle.fill" : "circle.dotted"))
+                .foregroundStyle(branch.isArchived ? Color.gray :
+                    (branch.isMergedIntoBase ? Color.green : Color.orange))
+                .frame(width: 18)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(branch.name).font(.system(size: 13, weight: .medium))
+                    if branch.worktreePath != nil {
+                        Image(systemName: "folder.badge.gearshape")
+                            .accessibilityLabel("Checked out in a worktree")
+                    }
+                    if branch.isPinned {
+                        Image(systemName: "pin.fill")
+                            .accessibilityLabel("Pinned branch")
+                    }
+                }
+                Text(branch.subject)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            if let date = branch.lastCommit {
+                Text(date, style: .relative)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.vertical, 5)
+        .tag(branch.name)
+        .contextMenu {
+            if branch.worktreePath == nil {
+                Button("Checkout Branch") { model.checkout(branch.name) }
+            }
+            Menu("Parent Branch") {
+                ForEach(model.branches.filter { $0 != branch.name }, id: \.self) { parent in
+                    Button(parent) { model.setBranchParent(parent, for: branch.name) }
+                }
+                Divider()
+                Button("Clear Parent") { model.setBranchParent(nil, for: branch.name) }
+            }
+            Button("Mark as Stacked") { model.setBranchStacked(true, for: branch.name) }
+            Button("Unstack Branch") { model.setBranchStacked(false, for: branch.name) }
+            Divider()
+            if branch.isArchived {
+                Button("Unarchive Branch") { model.setBranchArchived(false, for: branch.name) }
+            } else if branch.worktreePath == nil {
+                Button("Archive Branch") { model.setBranchArchived(true, for: branch.name) }
+            }
+            Button(branch.isPinned ? "Unpin Branch" : "Pin Branch") {
+                model.setBranchPinned(!branch.isPinned, for: branch.name)
+            }
+            Button(branch.skipsAutoArchive ? "Allow Auto-Archiving" : "Skip Auto-Archiving") {
+                model.setBranchSkipAutoArchive(!branch.skipsAutoArchive, for: branch.name)
+            }
+            if let path = branch.worktreePath {
+                Button("Open Worktree") {
+                    model.addRepository(URL(fileURLWithPath: path, isDirectory: true))
+                }
+            }
+        }
+    }
+
+    private var archiveBranchesSheet: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Archive Branches").font(.title2.weight(.semibold))
+            Text("Archived branches keep their commits and can be restored at any time.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            List {
+                ForEach(model.archiveCandidates) { candidate in
+                    Toggle(isOn: Binding(
+                        get: { archiveSelection.contains(candidate.branch) },
+                        set: { selected in
+                            if selected { archiveSelection.insert(candidate.branch) }
+                            else { archiveSelection.remove(candidate.branch) }
+                        }
+                    )) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(candidate.branch)
+                            Text(candidate.reason)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            HStack {
+                Button("Select All") { archiveSelection = Set(model.archiveCandidates.map(\.branch)) }
+                Button("Clear") { archiveSelection.removeAll() }
+                Spacer()
+                Button("Cancel") { showingArchiveDialog = false }
+                Button("Archive Selected") {
+                    model.archiveSelectedBranches(model.archiveCandidates
+                        .map(\.branch).filter(archiveSelection.contains))
+                    showingArchiveDialog = false
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(archiveSelection.isEmpty || model.isBusy)
+            }
+        }
+        .padding(20)
+        .frame(minWidth: 480, minHeight: 360)
     }
 
     private var tagsContent: some View {

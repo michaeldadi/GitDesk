@@ -4,7 +4,7 @@ Status: working plan, 2026-11-07. Target: installed Tower 18.0 (564) for Mac.
 
 ## Outcome and scope
 
-Build a native, local-first Git client that covers the useful Tower 18 workflows with GitDesk's own UI, code, iconography, and terminology. A user must be able to perform local Git work without a GitDesk subscription or account. Hosting providers, AI models, and signing services can have their own costs, which the app must disclose before connecting to them. The [parity matrix](parity-matrix.md) is the acceptance ledger; a feature is complete only when its behavior, failure and recovery paths, and relevant accessibility and performance checks pass.
+Build a native, local-first Git client that covers Tower 18 for Mac's published feature set, including the Pro capabilities, with GitDesk's own UI, code, iconography, and terminology. A user must be able to perform local Git work without a GitDesk subscription or account. Hosting providers, AI models, and signing services can have their own costs, which the app must disclose before connecting to them. The [parity matrix](parity-matrix.md) is the acceptance ledger; a feature is complete only when its behavior, failure and recovery paths, and relevant accessibility and performance checks pass.
 
 The current product baseline is **macOS 27 on Apple silicon**. macOS 27 is [Apple silicon only](https://developer.apple.com/news/?id=k1mtkt1k). Supporting older macOS or Intel is conditional: evaluate it after the native UI and Git engine work, and do not constrain a better macOS 27 implementation to keep that support. The installed Tower target supports macOS 14+, but that is a property of Tower, not a GitDesk requirement.
 
@@ -17,7 +17,7 @@ The current product baseline is **macOS 27 on Apple silicon**. macOS 27 is [Appl
 | Tower signature | Developer ID Application: fournova Software GmbH, team `UN97WY764J`; notarization ticket stapled | Identity observation only; this does not grant analysis rights. |
 | Study machine | macOS 27.2, build 26B123 | UI observations are specific to this OS unless reproduced elsewhere. |
 | GitDesk | Standalone Swift package and ad-hoc signed `.app`; current `Package.swift` and bundle require macOS 27 | Keep 27 as baseline. Existing prototype is not a release build. |
-| Local prototype validation | `swift test` passed 11 disposable-repository tests on this machine | This confirms those tested Git transitions, not Tower parity or broad reliability. |
+| Local prototype validation | `swift test` passed 12 disposable-repository tests and the ad-hoc app bundle built on this machine | This confirms those tested Git transitions and compilation, not Tower parity or broad reliability. |
 
 The prototype already has a repository library, status, text diffs, file and hunk staging, commits, basic branches/tags/remotes, fetch/fast-forward pull/push, stashes, worktrees, history, local branch-parent/stacked metadata, and a CLI. It uses the system Git. The pre-existing uncommitted changes must be preserved. The README and current tests are the implementation inventory, but each matrix row remains open until its acceptance evidence is attached.
 
@@ -25,7 +25,7 @@ The prototype already has a repository library, status, text diffs, file and hun
 
 1. **Public behavior study may proceed now.** Use Tower's published [feature overview](https://www.git-tower.com/features/all-features), [18.0 release notes](https://www.git-tower.com/release-notes), and [Mac help](https://www.git-tower.com/help). Independently implement Git behavior using Git's public documentation and disposable repositories.
 2. **Restricted analysis is gated.** Tower's [EULA](https://www.git-tower.com/legal/eula) expressly restricts reverse engineering, decompilation, and disassembly. Obtain a qualified review of applicable rights or written vendor authorization that identifies the allowed methods and scope before examining executable internals, symbols, private assets, configuration formats, or runtime internals. Record the decision and its basis in a private rights record. Do not assume possession of the app or an Apple Developer membership satisfies this gate.
-3. **Live Tower experiments need lawful access.** The reported trial is expired. Obtain a valid Tower entitlement or vendor-authorized extension before exercising disabled features. Do not reset the trial, alter signatures, patch binaries, intercept credentials, or disable macOS protections. Use disposable Git repositories and test provider accounts.
+3. **Live Tower experiments need lawful access.** The branch-archive observation used a vendor-issued trial activated through Tower's documented CLI; Tower currently shows an expired-trial screen again. Obtain a valid Tower entitlement or vendor-authorized extension before further exercising disabled features. Do not reset the trial, alter signatures, patch binaries, intercept credentials, or disable macOS protections. Use disposable Git repositories and test provider accounts.
 4. **Clean-room output.** Record observable behavior and independent specifications. Keep Tower code, decompiled material, and artwork out of the GitDesk repository. If restricted analysis is authorized, store raw analysis separately with access controls and publish only behavioral findings needed to implement and test GitDesk.
 
 These gates affect *claims of observed parity*, not the ability to build the independent client from public Git and product documentation. The right to study a program and the right to use a paid Tower feature are separate questions.
@@ -90,8 +90,8 @@ Stages are dependency gates, not a promise that every stage will finish on a cal
 
 ## Immediate next sequence
 
-1. Preserve and review the existing uncommitted GitDesk prototype changes; finish their focused tests and app smoke test before further engine work.
+1. Finish the branch-archive restore action in the UI and measure candidate scanning on large histories. The disposable UI fixture confirmed candidate preview, manual archive, an Archived Branches group, and retained refs; the UI automation timed out on the restore context menu. The [observation record](tower-18-pro-branch-archive-observation.md) lists open Tower behavior questions.
 2. Use the [matrix](parity-matrix.md) to add exact fixtures and acceptance tests for stage 2 features, starting with path safety, hunk staging races, clone cancellation, worktree lifecycle, and remote error handling.
-3. Resolve the rights and Tower entitlement gates. Until then, write independent specifications from public docs and Git behavior; do not mark any Tower-specific interaction as observed.
+3. Resolve the Tower entitlement gate before further live experiments. Continue independent specifications from public docs and Git behavior; do not mark untested Tower-specific interactions as observed.
 4. Convert the current CLI design into a separate, view-oriented contract and expand app navigation to support it. Keep the current mutation commands available under an explicitly documented GitDesk-specific interface.
 5. Reassess release packaging after the engine and UI contract stabilizes; use the renewed Apple Developer account for signing/notarization at that point.

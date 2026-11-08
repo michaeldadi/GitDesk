@@ -2,7 +2,9 @@
 
 Frozen source set, 2026-11-07: [Tower feature overview](https://www.git-tower.com/features/all-features), [Tower 18.0 release notes](https://www.git-tower.com/release-notes), [Tower 18 CLI guide](https://www.git-tower.com/help/guides/integration/using-the-cli-tool/mac), and the linked Mac help topics. This inventory paraphrases the public feature claims. It is **not** a claim of observed Tower behavior. Every row starts with Tower evidence **D** (documented only). No row may receive **O** (observed) without a licensed, reproducible experiment using the [template](experiment-template.md). Add newly discovered settings, subcommands, shortcuts and error cases as child rows rather than hiding them in a parent row.
 
-`P` means a GitDesk prototype surface exists but parity is unverified; `N` means no product implementation established. Each acceptance cell is a minimum independent GitDesk check, not an assertion that Tower behaves in precisely that way. Stages refer to the [implementation plan](implementation-plan.md). The current prototype states come from code and ten passing tests on 2026-11-07, not a completed product review.
+`P` means a GitDesk prototype surface exists but parity is unverified; `N` means no product implementation established. Each acceptance cell is a minimum independent GitDesk check, not an assertion that Tower behaves in precisely that way. Stages refer to the [implementation plan](implementation-plan.md). The current prototype states come from code and focused tests on 2026-11-07, not a completed product review.
+
+The Pro rows include the paid tier. Tower's [Automatic Branch Management](https://www.git-tower.com/pro/automatic-branch-management) describes archiving as reversible: the branch ref and commits remain available. A [disposable-repository observation](tower-18-pro-branch-archive-observation.md) records the tested Tower 18 behavior. GitDesk's archive prototype follows part of it, with a first-parent-history heuristic for merged candidates; provider-aware merge detection and broader parity remain unverified.
 
 | ID | Capability to build | Stage | GitDesk | Minimum acceptance check |
 |---|---|---:|:---:|---|
@@ -92,7 +94,7 @@ Frozen source set, 2026-11-07: [Tower feature overview](https://www.git-tower.co
 | DOC-02 | Support and feedback route | 5 | N | Local diagnostics export with redaction and user-controlled send. |
 | PRO-01 | Configurable branch workflows | 3 | N | Presets and custom rules drive start/finish with visible commands. |
 | PRO-02 | Stacked branch creation and sync | 3 | N | Parent metadata, restack, conflict/abort and remote divergence. |
-| PRO-03 | Automatic branch cleanup | 3 | N | Stale/merged criteria preview, protected/worktree exclusions. |
+| PRO-03 | Reversible manual, bulk and automatic branch archiving | 3 | P | Candidate reasons, configurable staleness, pin/skip/base/worktree protections, preserved refs, restore, once-daily restart behavior, and large-history performance. |
 | PRO-04 | PR-aware merge detection | 4 | N | Squash/rebase merge evidence from provider, no false ancestry claim. |
 | PRO-05 | Self-hosted provider accounts | 4 | N | Custom endpoint/TLS/auth, discovery and PR capability flags. |
 | PRO-06 | Graphite workflow adapter | 4 | N | Optional connection, local stack remains usable when absent. |

@@ -103,8 +103,40 @@ public struct GitBranchReview: Identifiable, Hashable, Sendable {
     public let upstream: String?
     public let isMergedIntoBase: Bool
     public let worktreePath: String?
+    public let isArchived: Bool
+    public let isPinned: Bool
+    public let skipsAutoArchive: Bool
 
     public var id: String { name }
+}
+
+public struct GitBranchArchiveSettings: Equatable, Sendable {
+    public let automaticallyArchive: Bool
+    public let automaticArchiveBase: String?
+    public let staleAfterMonths: Int
+
+    public init(automaticallyArchive: Bool = false, automaticArchiveBase: String? = nil,
+                staleAfterMonths: Int = 1) {
+        self.automaticallyArchive = automaticallyArchive
+        self.automaticArchiveBase = automaticArchiveBase
+        self.staleAfterMonths = staleAfterMonths
+    }
+}
+
+public struct GitBranchArchiveCandidate: Identifiable, Hashable, Sendable {
+    public let branch: String
+    public let isMerged: Bool
+    public let isStale: Bool
+
+    public var id: String { branch }
+    public var reason: String {
+        switch (isMerged, isStale) {
+        case (true, true): "Merged and stale"
+        case (true, false): "Merged"
+        case (false, true): "Stale"
+        case (false, false): "Not eligible"
+        }
+    }
 }
 
 public struct GitBranchComparison: Sendable {

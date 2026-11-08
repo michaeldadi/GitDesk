@@ -157,7 +157,7 @@ public actor GitRepository {
 
     public func branches() throws -> [String] {
         let result = try process.run(
-            in: location, ["for-each-ref", "--format=%(refname:short)", "refs/heads"]
+            in: location, ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads"]
         )
         return result.text.split(whereSeparator: \.isNewline).map(String.init)
     }
@@ -167,9 +167,10 @@ public actor GitRepository {
         guard names.contains(base) else {
             throw GitDeskError.invalidInput("The base branch no longer exists. Refresh branches.")
         }
+        let config = try localConfigValues()
         let merged = try process.run(
             in: location, ["for-each-ref", "--merged=refs/heads/\(base)",
-                           "--format=%(refname:short)", "refs/heads"]
+                           "--format=%(refname:lstrip=2)", "refs/heads"]
         ).text.split(whereSeparator: \.isNewline).map(String.init)
         let mergedSet = Set(merged)
         var worktreeByBranch: [String: String] = [:]
@@ -180,7 +181,7 @@ public actor GitRepository {
         }
         let output = try process.run(in: location, [
             "for-each-ref", "--sort=-committerdate",
-            "--format=%(refname:short)%00%(objectname)%00%(committerdate:iso8601-strict)%00%(subject)%00%(upstream:short)",
+            "--format=%(refname:lstrip=2)%00%(objectname)%00%(committerdate:iso8601-strict)%00%(subject)%00%(upstream:short)",
             "refs/heads"
         ]).text
         let formatter = ISO8601DateFormatter()
@@ -194,9 +195,154 @@ public actor GitRepository {
                 subject: String(fields[3]),
                 upstream: fields[4].isEmpty ? nil : String(fields[4]),
                 isMergedIntoBase: mergedSet.contains(name),
-                worktreePath: worktreeByBranch[name]
+                worktreePath: worktreeByBranch[name],
+                isArchived: Self.configFlag(config["branch.\(name).gitdeskarchived"]),
+                isPinned: Self.configFlag(config["branch.\(name).gitdeskpinned"]),
+                skipsAutoArchive: Self.configFlag(config["branch.\(name).gitdeskskipautoarchive"])
             )
         }
+    }
+
+    public func branchArchiveSettings() throws -> GitBranchArchiveSettings {
+        let config = try localConfigValues()
+        let months = config["gitdesk.staleaftermonths"].flatMap(Int.init) ?? 1
+        guard Self.staleIntervalOptions.contains(months) else {
+            throw GitDeskError.invalidInput("Invalid GitDesk stale branch interval.")
+        }
+        return GitBranchArchiveSettings(
+            automaticallyArchive: Self.configFlag(config["gitdesk.autoarchive"]),
+            automaticArchiveBase: config["gitdesk.autoarchivebase"],
+            staleAfterMonths: months
+        )
+    }
+
+    public func setAutomaticBranchArchive(_ enabled: Bool, base: String? = nil) throws {
+        if enabled {
+            guard let base, try branches().contains(base) else {
+                throw GitDeskError.invalidInput("Choose an existing comparison base before enabling automatic archiving.")
+            }
+            _ = try process.run(in: location, [
+                "config", "--local", "--replace-all", "gitdesk.autoarchivebase", base
+            ])
+        }
+        _ = try process.run(in: location, [
+            "config", "--local", "--replace-all", "gitdesk.autoarchive", enabled ? "true" : "false"
+        ])
+    }
+
+    public func setStaleBranchInterval(months: Int) throws {
+        guard Self.staleIntervalOptions.contains(months) else {
+            throw GitDeskError.invalidInput("Choose one of the available stale branch intervals.")
+        }
+        _ = try process.run(in: location, [
+            "config", "--local", "--replace-all", "gitdesk.staleaftermonths", String(months)
+        ])
+    }
+
+    public func archiveCandidates(base: String, asOf: Date = Date()) throws -> [GitBranchArchiveCandidate] {
+        let settings = try branchArchiveSettings()
+        let review = try branchReview(base: base)
+        let config = try localConfigValues()
+        let parentBranches = Set(review.compactMap { config["branch.\($0.name).gitdeskparent"] })
+        // A ref pointing into the base's first-parent history has no separate
+        // merged branch tip in the observed Tower fixture.
+        let baseFirstParentHeads = Set(try process.run(in: location, [
+            "rev-list", "--first-parent", "refs/heads/\(base)"
+        ]).text.split(whereSeparator: \.isNewline).map(String.init))
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        guard let staleBefore = calendar.date(
+            byAdding: .month, value: -settings.staleAfterMonths, to: asOf
+        ) else {
+            throw GitDeskError.invalidInput("Could not calculate the stale branch interval.")
+        }
+        return review.compactMap { branch in
+            guard branch.name != base,
+                  !(branch.isMergedIntoBase && baseFirstParentHeads.contains(branch.head)),
+                  branch.worktreePath == nil,
+                  !branch.isArchived,
+                  !branch.isPinned,
+                  !branch.skipsAutoArchive,
+                  !parentBranches.contains(branch.name) else { return nil }
+            let isStale = branch.lastCommit.map { $0 < staleBefore } ?? false
+            guard branch.isMergedIntoBase || isStale else { return nil }
+            return GitBranchArchiveCandidate(
+                branch: branch.name, isMerged: branch.isMergedIntoBase, isStale: isStale
+            )
+        }
+    }
+
+    public func setBranchArchived(_ archived: Bool, for name: String) throws {
+        let branch = try resolveLocalBranch(name)
+        if archived {
+            guard !(try worktrees()).contains(where: { $0.branch == branch }) else {
+                throw GitDeskError.invalidInput("A checked-out branch cannot be archived.")
+            }
+        }
+        try setBranchFlag("gitdeskarchived", enabled: archived, for: branch)
+    }
+
+    public func setBranchPinned(_ pinned: Bool, for name: String) throws {
+        try setBranchFlag("gitdeskpinned", enabled: pinned, for: resolveLocalBranch(name))
+    }
+
+    public func setBranchSkipAutoArchive(_ skip: Bool, for name: String) throws {
+        try setBranchFlag("gitdeskskipautoarchive", enabled: skip, for: resolveLocalBranch(name))
+    }
+
+    public func archiveBranches(_ names: [String], base: String, asOf: Date = Date()) throws {
+        let eligible = Set(try archiveCandidates(base: base, asOf: asOf).map(\.branch))
+        guard !names.isEmpty, Set(names).count == names.count,
+              names.allSatisfy(eligible.contains) else {
+            throw GitDeskError.invalidInput("The archive selection changed. Refresh the preview before archiving.")
+        }
+        for name in names { try setBranchArchived(true, for: name) }
+    }
+
+    public func runAutomaticBranchArchive(asOf: Date = Date()) throws -> [String] {
+        let settings = try branchArchiveSettings()
+        guard settings.automaticallyArchive else { return [] }
+        guard let base = settings.automaticArchiveBase else {
+            throw GitDeskError.invalidInput("Automatic archiving has no comparison base. Choose one in Branches settings.")
+        }
+        let day = String(ISO8601DateFormatter().string(from: asOf).prefix(10))
+        if let lastRun = try localConfigValue("gitdesk.autoarchivelastrunday"), lastRun >= day {
+            return []
+        }
+        let names = try archiveCandidates(base: base, asOf: asOf).map(\.branch)
+        if !names.isEmpty { try archiveBranches(names, base: base, asOf: asOf) }
+        _ = try process.run(in: location, [
+            "config", "--local", "--replace-all", "gitdesk.autoarchivelastrunday", day
+        ])
+        return names
+    }
+
+    private func setBranchFlag(_ flag: String, enabled: Bool, for branch: String) throws {
+        let key = "branch.\(branch).\(flag)"
+        if enabled {
+            _ = try process.run(in: location, ["config", "--local", "--replace-all", key, "true"])
+        } else {
+            try unsetLocalConfig(key)
+        }
+    }
+
+    private static func configFlag(_ value: String?) -> Bool {
+        guard let value else { return false }
+        return ["true", "yes", "on", "1"].contains(value.lowercased())
+    }
+
+    private static let staleIntervalOptions: Set<Int> = [1, 2, 3, 4, 6, 9, 12, 18, 24]
+
+    private func localConfigValues() throws -> [String: String] {
+        let data = try process.run(in: location, ["config", "--local", "--null", "--list"]).output
+        var values: [String: String] = [:]
+        for token in data.split(separator: 0) {
+            guard let separator = token.firstIndex(of: 10) else { continue }
+            let key = String(decoding: token[..<separator], as: UTF8.self)
+            let value = String(decoding: token[token.index(after: separator)...], as: UTF8.self)
+            values[key] = value
+        }
+        return values
     }
 
     public func compareBranch(_ name: String, withBase base: String) throws -> GitBranchComparison {
@@ -316,7 +462,7 @@ public actor GitRepository {
 
     public func tags() throws -> [String] {
         let output = try process.run(in: location, [
-            "for-each-ref", "--sort=refname", "--format=%(refname:short)", "refs/tags"
+            "for-each-ref", "--sort=refname", "--format=%(refname:lstrip=2)", "refs/tags"
         ]).text
         return output.split(whereSeparator: \.isNewline).map(String.init)
     }

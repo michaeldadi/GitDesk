@@ -172,6 +172,92 @@ final class GitRepositoryTests: XCTestCase {
         }
     }
 
+    func testBranchArchivingPreservesRefsAndProtectsActivePinnedAndParentBranches() async throws {
+        let url = try fixture()
+        defer { try? FileManager.default.removeItem(at: url) }
+        let git = GitProcess()
+        _ = try git.run(in: url, ["commit", "--allow-empty", "-m", "Base"])
+        let repository = try GitRepository(location: url)
+        let base = try await repository.branchName()
+        _ = try git.run(in: url, ["tag", "--no-sign", "-a", "-m", "Same-name tag", "topic/merged.part"])
+        _ = try git.run(in: url, ["branch", "topic/merged.part"])
+        _ = try git.run(in: url, ["switch", "-c", "topic/integrated"])
+        _ = try git.run(in: url, ["commit", "--allow-empty", "-m", "Integrated"])
+        _ = try git.run(in: url, ["switch", base])
+        _ = try git.run(in: url, ["merge", "--no-ff", "-m", "Merge integrated", "topic/integrated"])
+        _ = try git.run(in: url, ["switch", "-c", "topic/parent"])
+        _ = try git.run(in: url, ["commit", "--allow-empty", "-m", "Parent"])
+        _ = try git.run(in: url, ["switch", "-c", "topic/child"])
+        _ = try git.run(in: url, ["commit", "--allow-empty", "-m", "Child"])
+        _ = try git.run(in: url, ["switch", base])
+        try await repository.setBranchParent("topic/parent", for: "topic/child")
+        try await repository.setBranchStacked(true, for: "topic/child")
+
+        let now = Date()
+        let initialCandidates = try await repository.archiveCandidates(base: base, asOf: now)
+        XCTAssertEqual(initialCandidates.map(\.branch), ["topic/integrated"])
+        try await repository.setBranchPinned(true, for: "topic/integrated")
+        let pinnedCandidates = try await repository.archiveCandidates(base: base, asOf: now)
+        XCTAssertTrue(pinnedCandidates.isEmpty)
+        try await repository.setBranchPinned(false, for: "topic/integrated")
+        try await repository.setBranchSkipAutoArchive(true, for: "topic/integrated")
+        let skippedCandidates = try await repository.archiveCandidates(base: base, asOf: now)
+        XCTAssertTrue(skippedCandidates.isEmpty)
+        try await repository.setBranchSkipAutoArchive(false, for: "topic/integrated")
+        do {
+            try await repository.archiveBranches(["topic/child"], base: base)
+            XCTFail("An unmerged recent branch must not pass a stale archive preview")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("selection changed"))
+        }
+        do {
+            try await repository.setBranchArchived(true, for: base)
+            XCTFail("The checked-out branch must not be archived")
+        } catch {
+            XCTAssertTrue(error.localizedDescription.contains("checked-out"))
+        }
+
+        try await repository.archiveBranches(["topic/integrated"], base: base)
+        let archived = try await repository.branchReview(base: base)
+        XCTAssertTrue(try XCTUnwrap(archived.first(where: { $0.name == "topic/integrated" })).isArchived)
+        let refsAfterArchive = try await repository.branches()
+        XCTAssertTrue(refsAfterArchive.contains("topic/integrated"))
+        XCTAssertEqual(try git.run(in: url, ["config", "--local", "--get", "branch.topic/integrated.gitdeskarchived"]).text.trimmingCharacters(in: .whitespacesAndNewlines), "true")
+        try await repository.setBranchArchived(false, for: "topic/integrated")
+        let restored = try await repository.branchReview(base: base)
+        XCTAssertFalse(try XCTUnwrap(restored.first(where: { $0.name == "topic/integrated" })).isArchived)
+
+        try await repository.setStaleBranchInterval(months: 1)
+        let future = now.addingTimeInterval(120 * 86_400)
+        let candidates = try await repository.archiveCandidates(base: base, asOf: future)
+        XCTAssertEqual(Set(candidates.map(\.branch)), ["topic/integrated", "topic/child"])
+        XCTAssertTrue(candidates.first(where: { $0.branch == "topic/child" })?.isStale == true)
+        XCTAssertFalse(candidates.contains(where: { $0.branch == "topic/parent" }))
+        XCTAssertFalse(candidates.contains(where: { $0.branch == base }))
+
+        try await repository.setAutomaticBranchArchive(true, base: base)
+        let autoArchived = try await repository.runAutomaticBranchArchive(asOf: now)
+        XCTAssertEqual(autoArchived, ["topic/integrated"])
+        let refsAfterAutoArchive = try await repository.branches()
+        XCTAssertTrue(refsAfterAutoArchive.contains("topic/child"))
+        let afterAutoArchive = try await repository.branchReview(base: base)
+        XCTAssertFalse(try XCTUnwrap(afterAutoArchive.first(where: { $0.name == "topic/child" })).isArchived)
+        _ = try git.run(in: url, ["switch", "-c", "topic/later"])
+        _ = try git.run(in: url, ["commit", "--allow-empty", "-m", "Later"])
+        _ = try git.run(in: url, ["switch", base])
+        _ = try git.run(in: url, ["merge", "--no-ff", "-m", "Merge later", "topic/later"])
+        let reopened = try GitRepository(location: url)
+        let sameDayRun = try await reopened.runAutomaticBranchArchive(asOf: now)
+        XCTAssertEqual(sameDayRun, [])
+        let nextDayRun = try await reopened.runAutomaticBranchArchive(
+            asOf: now.addingTimeInterval(86_400)
+        )
+        XCTAssertEqual(nextDayRun, ["topic/later"])
+        let finalReview = try await reopened.branchReview(base: base)
+        XCTAssertTrue(try XCTUnwrap(finalReview.first(where: { $0.name == "topic/later" })).isArchived)
+        XCTAssertFalse(try XCTUnwrap(finalReview.first(where: { $0.name == "topic/merged.part" })).isArchived)
+    }
+
     func testCloneLocalRepositoryAndRejectCredentialURL() async throws {
         let source = try fixture()
         let destination = source.deletingLastPathComponent()
