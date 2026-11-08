@@ -54,11 +54,20 @@ public struct GitCommit: Identifiable, Hashable, Sendable {
 
 public struct GitRepositorySnapshot: Sendable {
     public let branch: String
+    public let upstream: String?
+    public let ahead: Int?
+    public let behind: Int?
     public let entries: [GitStatusEntry]
 
-    public init(branch: String, entries: [GitStatusEntry]) {
+    public init(
+        branch: String, entries: [GitStatusEntry],
+        upstream: String? = nil, ahead: Int? = nil, behind: Int? = nil
+    ) {
         self.branch = branch
         self.entries = entries
+        self.upstream = upstream
+        self.ahead = ahead
+        self.behind = behind
     }
 }
 
@@ -83,6 +92,77 @@ public struct GitWorktree: Identifiable, Hashable, Sendable {
         self.isDetached = isDetached
         self.isBare = isBare
         self.lockReason = lockReason
+    }
+}
+
+public struct GitBranchReview: Identifiable, Hashable, Sendable {
+    public let name: String
+    public let head: String
+    public let lastCommit: Date?
+    public let subject: String
+    public let upstream: String?
+    public let isMergedIntoBase: Bool
+    public let worktreePath: String?
+
+    public var id: String { name }
+}
+
+public struct GitBranchComparison: Sendable {
+    public let baseOnly: Int
+    public let branchOnly: Int
+}
+
+public struct GitBranchRelationship: Sendable {
+    public let branch: String
+    public let parent: String?
+    public let isStacked: Bool
+}
+
+public struct GitStash: Identifiable, Hashable, Sendable {
+    public let reference: String
+    public let subject: String
+    public var id: String { reference }
+}
+
+public struct GitDiffHunk: Identifiable, Sendable {
+    public let id: Int
+    public let heading: String
+    public let raw: String
+}
+
+public struct GitPatch: Sendable {
+    public let raw: String
+    public let header: String
+    public let hunks: [GitDiffHunk]
+}
+
+public enum GitPatchParser {
+    public static func parse(_ raw: String) -> GitPatch? {
+        guard raw.hasPrefix("diff --git ") else { return nil }
+        let lines = raw.split(separator: "\n", omittingEmptySubsequences: false)
+        var header = ""
+        var bodies: [(heading: String, raw: String)] = []
+        for (index, line) in lines.enumerated() {
+            let text = String(line)
+            let piece = text + (index == lines.count - 1 ? "" : "\n")
+            if text.hasPrefix("diff --git "), index != 0 { return nil }
+            if text.hasPrefix("@@ ") {
+                bodies.append((heading: text, raw: piece))
+            } else if bodies.isEmpty {
+                header += piece
+            } else {
+                bodies[bodies.count - 1].raw += piece
+            }
+        }
+        guard !bodies.isEmpty, header.contains("\n--- "), header.contains("\n+++ ") else {
+            return nil
+        }
+        return GitPatch(
+            raw: raw, header: header,
+            hunks: bodies.enumerated().map { index, body in
+                GitDiffHunk(id: index, heading: body.heading, raw: body.raw)
+            }
+        )
     }
 }
 
@@ -121,6 +201,29 @@ public enum GitWorktreeParser {
 }
 
 public enum GitStatusParser {
+    public static func tracking(from data: Data) -> (upstream: String?, ahead: Int?, behind: Int?) {
+        var upstream: String?
+        var ahead: Int?
+        var behind: Int?
+        for token in data.split(separator: 0, omittingEmptySubsequences: true) {
+            let record = String(decoding: token, as: UTF8.self)
+            guard record.hasPrefix("# ") else { break }
+            if record.hasPrefix("# branch.upstream ") {
+                upstream = String(record.dropFirst("# branch.upstream ".count))
+            } else if record.hasPrefix("# branch.ab ") {
+                let counts = record.dropFirst("# branch.ab ".count).split(separator: " ")
+                if counts.count == 2,
+                   counts[0].hasPrefix("+"), counts[1].hasPrefix("-"),
+                   let a = Int(counts[0].dropFirst()),
+                   let b = Int(counts[1].dropFirst()) {
+                    ahead = a
+                    behind = b
+                }
+            }
+        }
+        return (upstream, ahead, behind)
+    }
+
     public static func branch(from data: Data) -> String? {
         var head: String?
         var oid: String?

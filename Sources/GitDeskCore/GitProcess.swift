@@ -29,11 +29,15 @@ public struct GitProcess: Sendable {
     public func run(
         in directory: URL,
         _ arguments: [String],
+        input: Data? = nil,
         acceptedExitCodes: Set<Int32> = [0]
     ) throws -> GitProcessResult {
         let temporaryDirectory = FileManager.default.temporaryDirectory
             .appending(path: "gitdesk-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: temporaryDirectory, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: temporaryDirectory, withIntermediateDirectories: true,
+            attributes: [.posixPermissions: 0o700]
+        )
         defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
 
         let outputURL = temporaryDirectory.appending(path: "stdout")
@@ -42,9 +46,18 @@ public struct GitProcess: Sendable {
         FileManager.default.createFile(atPath: errorURL.path, contents: nil)
         let outputHandle = try FileHandle(forWritingTo: outputURL)
         let errorHandle = try FileHandle(forWritingTo: errorURL)
+        let inputHandle: FileHandle?
+        if let input {
+            let inputURL = temporaryDirectory.appending(path: "stdin")
+            try input.write(to: inputURL, options: .atomic)
+            inputHandle = try FileHandle(forReadingFrom: inputURL)
+        } else {
+            inputHandle = nil
+        }
         defer {
             try? outputHandle.close()
             try? errorHandle.close()
+            try? inputHandle?.close()
         }
 
         let process = Process()
@@ -53,7 +66,7 @@ public struct GitProcess: Sendable {
         process.arguments = arguments
         process.standardOutput = outputHandle
         process.standardError = errorHandle
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = inputHandle ?? FileHandle.nullDevice
         var environment = ProcessInfo.processInfo.environment
         environment["LC_ALL"] = "C"
         environment["GIT_TERMINAL_PROMPT"] = "0"

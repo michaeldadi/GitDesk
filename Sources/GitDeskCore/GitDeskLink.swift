@@ -1,7 +1,7 @@
 import Foundation
 
 public enum GitDeskView: String, CaseIterable, Sendable {
-    case changes, history, stashes, worktrees
+    case changes, history, branches, stashes, worktrees
 }
 
 public struct GitDeskLink: Sendable {

@@ -6,18 +6,19 @@ import GitDeskCore
 struct GitDeskCLI {
     static func main() async {
         do {
-            try await run()
+            let code = try await run()
+            if code != 0 { exit(code) }
         } catch {
             fputs("gitdesk: \(error.localizedDescription)\n", stderr)
             exit(1)
         }
     }
 
-    private static func run() async throws {
+    private static func run() async throws -> Int32 {
         var arguments = Array(CommandLine.arguments.dropFirst())
         if arguments.isEmpty || arguments.contains("--help") {
             print(usage)
-            return
+            return 0
         }
 
         var repositoryPath = FileManager.default.currentDirectoryPath
@@ -41,21 +42,21 @@ struct GitDeskCLI {
                 remote: parameters[0],
                 destination: URL(fileURLWithPath: parameters[1], isDirectory: true)
             )
-            return
+            return 0
         }
         if command == "init" {
             guard parameters.count == 1 else {
                 throw GitDeskError.invalidInput("Usage: gitdesk init <directory>")
             }
             try GitRepository.create(at: URL(fileURLWithPath: parameters[0], isDirectory: true))
-            return
+            return 0
         }
         if command == "open" {
             var view: GitDeskView = .changes
             if let index = parameters.firstIndex(of: "--view") {
                 guard index + 1 < parameters.count,
                       let requested = GitDeskView(rawValue: parameters[index + 1]) else {
-                    throw GitDeskError.invalidInput("Use --view changes|history|stashes|worktrees.")
+                    throw GitDeskError.invalidInput("Use --view changes|history|branches|stashes|worktrees.")
                 }
                 view = requested
             }
@@ -65,7 +66,7 @@ struct GitDeskCLI {
             guard NSWorkspace.shared.open(link.url) else {
                 throw GitDeskError.invalidInput("GitDesk.app is not registered to open links. Launch the app once, then retry.")
             }
-            return
+            return 0
         }
 
         let repository = try GitRepository(
@@ -103,14 +104,47 @@ struct GitDeskCLI {
                 amend: parameters.contains("--amend")
             )
         case "branch":
-            if parameters.isEmpty || parameters[0] == "list" {
+            if parameters.first == "parent" || parameters.first == "stacked" {
+                return try await runBranchRelationship(repository, parameters: parameters)
+            } else if parameters.isEmpty || parameters[0] == "list" {
                 for branch in try await repository.branches() { print(branch) }
             } else if parameters[0] == "create", parameters.count == 2 {
                 try await repository.createBranch(parameters[1])
             } else if parameters[0] == "switch", parameters.count == 2 {
                 try await repository.checkout(parameters[1])
+            } else if parameters[0] == "review", parameters.count <= 2 {
+                let branches = try await repository.branches()
+                guard let base = parameters.dropFirst().first
+                    ?? (branches.contains("main") ? "main" : branches.first) else {
+                    throw GitDeskError.invalidInput("This repository has no branches yet.")
+                }
+                for branch in try await repository.branchReview(base: base) {
+                    let state = branch.isMergedIntoBase ? "merged" : "open"
+                    print("\(state)\t\(branch.name)\t\(branch.worktreePath ?? "")")
+                }
             } else {
-                throw GitDeskError.invalidInput("Usage: gitdesk branch [list|create <name>|switch <name>]")
+                throw GitDeskError.invalidInput("Usage: gitdesk branch [list|create <name>|switch <name>|review [base]]")
+            }
+        case "tag":
+            if parameters.isEmpty || parameters[0] == "list" {
+                for tag in try await repository.tags() { print(tag) }
+            } else if parameters[0] == "create", parameters.count >= 2 {
+                let message = parameters.dropFirst(2).joined(separator: " ")
+                try await repository.createTag(parameters[1], message: message.isEmpty ? nil : message)
+            } else if parameters[0] == "delete", parameters.count == 2 {
+                try await repository.deleteTag(parameters[1])
+            } else {
+                throw GitDeskError.invalidInput("Usage: gitdesk tag [list|create <name> [message]|delete <name>]")
+            }
+        case "remote":
+            if parameters.isEmpty || parameters[0] == "list" {
+                for remote in try await repository.remotes() { print(remote) }
+            } else if parameters[0] == "add", parameters.count == 3 {
+                try await repository.addRemote(name: parameters[1], url: parameters[2])
+            } else if parameters[0] == "remove", parameters.count == 2 {
+                try await repository.removeRemote(parameters[1])
+            } else {
+                throw GitDeskError.invalidInput("Usage: gitdesk remote [list|add <name> <url>|remove <name>]")
             }
         case "fetch":
             try await repository.fetch()
@@ -120,13 +154,17 @@ struct GitDeskCLI {
             try await repository.push()
         case "stash":
             if parameters.isEmpty || parameters[0] == "list" {
-                for stash in try await repository.stashes() { print(stash) }
+                for stash in try await repository.stashes() {
+                    print("\(stash.reference)\t\(stash.subject)")
+                }
             } else if parameters[0] == "save" {
                 try await repository.stash(message: parameters.dropFirst().joined(separator: " "))
             } else if parameters[0] == "apply", parameters.count == 2 {
                 try await repository.applyStash(parameters[1])
+            } else if parameters[0] == "show", parameters.count == 2 {
+                print(try await repository.stashDiff(parameters[1]), terminator: "")
             } else {
-                throw GitDeskError.invalidInput("Usage: gitdesk stash [list|save [message]|apply <ref>]")
+                throw GitDeskError.invalidInput("Usage: gitdesk stash [list|save [message]|show <ref>|apply <ref>]")
             }
         case "worktree":
             if parameters.isEmpty || parameters[0] == "list" {
@@ -144,6 +182,39 @@ struct GitDeskCLI {
         default:
             throw GitDeskError.invalidInput("Unknown command: \(command)")
         }
+        return 0
+    }
+
+    private static func runBranchRelationship(
+        _ repository: GitRepository, parameters: [String]
+    ) async throws -> Int32 {
+        let field = parameters[0]
+        var remaining = Array(parameters.dropFirst())
+        let branch = remaining.first?.hasPrefix("--") == false ? remaining.removeFirst() : nil
+        if remaining.isEmpty {
+            let relationship = try await repository.branchRelationship(branch)
+            if field == "parent" {
+                guard let parent = relationship.parent else { return 1 }
+                print(parent)
+                return 0
+            }
+            print(relationship.isStacked ? "true" : "false")
+            return relationship.isStacked ? 0 : 1
+        }
+        if field == "parent", remaining.count == 2, remaining[0] == "--set" {
+            try await repository.setBranchParent(remaining[1], for: branch)
+        } else if field == "parent", remaining == ["--clear"] {
+            try await repository.setBranchParent(nil, for: branch)
+        } else if field == "stacked", remaining == ["--set"] {
+            try await repository.setBranchStacked(true, for: branch)
+        } else if field == "stacked", remaining == ["--clear"] {
+            try await repository.setBranchStacked(false, for: branch)
+        } else {
+            throw GitDeskError.invalidInput(
+                "Usage: gitdesk branch parent [branch] [--set <parent>|--clear] or branch stacked [branch] [--set|--clear]"
+            )
+        }
+        return 0
     }
 
     private static let usage = """
@@ -159,7 +230,11 @@ struct GitDeskCLI {
           stage <paths...>               Stage files
           unstage <paths...>             Unstage files
           commit <message> [--amend]     Commit staged changes
-          branch [list|create|switch]   Manage local branches
+          branch [list|create|switch|review]  Manage and review local branches
+          branch parent [branch] [--set <parent>|--clear]  Read or set a local branch parent
+          branch stacked [branch] [--set|--clear]  Read or set a branch's stacked flag
+          tag [list|create|delete]       Manage local tags
+          remote [list|add|remove]      Manage remote names and URLs
           fetch | pull | push            Synchronize remotes
           stash [list|save|apply]        Manage stashes
           worktree [list|create]         List or create worktrees
